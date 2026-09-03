@@ -1,0 +1,1134 @@
+; CSE341 Project : CodeBreaker Arena
+; F1 Difficulty | F2 Feedback | F3 History/Undo
+; F4 Two Player | F5 Duplicate | F6 Score/Winner
+
+.MODEL SMALL
+.STACK 100H
+
+PRINTS MACRO TXT
+    LEA DX, TXT
+    MOV AH, 9
+    INT 21H
+ENDM
+
+PUTDIG MACRO
+    ADD AL, 30H
+    MOV DL, AL
+    MOV AH, 2
+    INT 21H
+ENDM
+
+.DATA
+
+SECRET      DB 6 DUP(0)
+GUESS       DB 6 DUP(0)
+CODELEN     DW 4
+MAXDIGIT    DB 6
+MAXTRIES    DB 8
+LEVEL       DB 2
+SEED        DW 0
+
+CORRECTPOS  DB 0
+WRONGPOS    DB 0
+USEDSECRET  DB 6 DUP(0)
+USEDGUESS   DB 6 DUP(0)
+
+HISTORY         DB 90 DUP(0)
+PLAYERHIST      DB 18 DUP(0)
+CORRECTHIST     DB 18 DUP(0)
+WRONGHIST       DB 18 DUP(0)
+HISTORYCOUNT    DB 0
+
+UNDORETURN      DW 0
+UNDOPLAYER      DB 0
+UNDOPOINTS      DW 0
+
+CURRENTPLAYER   DB 1
+ATTEMPTS1       DB 0
+ATTEMPTS2       DB 0
+SCORE1          DW 0
+SCORE2          DW 0
+LASTPOINTS      DW 0
+SOLVEDFLAG      DB 0
+WINNER          DB 0
+
+TITLE1 DB '============================================================$'
+TITLE2 DB 13,10,'                    CODEBREAKER ARENA$'
+TITLE3 DB 13,10,'============================================================$'
+
+MSG_LEVEL DB 13,10,'Select difficulty',13,10
+          DB '  1. EASY    - 3 digits, values 1-5, 9 tries',13,10
+          DB '  2. MEDIUM  - 4 digits, values 1-6, 8 tries',13,10
+          DB '  3. HARD    - 5 digits, values 1-7, 7 tries',13,10
+          DB 'Choice: $'
+
+MSG_INVALID_LEVEL DB 13,10,'Invalid difficulty. Try again.$'
+
+MSG_READY1 DB 13,10,13,10,'Game setup$'
+MSG_LEVEL_NAME DB 13,10,'Difficulty : $'
+MSG_EASY   DB 'EASY$'
+MSG_MEDIUM DB 'MEDIUM$'
+MSG_HARD   DB 'HARD$'
+MSG_LENGTH DB 13,10,'Code length: $'
+MSG_DIGITS DB 13,10,'Digits     : 1 - $'
+MSG_TRIES  DB 13,10,'Max tries  : $'
+MSG_RULE1  DB 13,10,13,10,'Feedback: Exact = right digit/right position$'
+MSG_RULE2  DB 13,10,'          Misplaced = right digit/wrong position$'
+MSG_RULE3  DB 13,10,'Score: Exact x 10 + remaining tries$'
+MSG_PRESS  DB 13,10,13,10,'Press any key to continue...$'
+
+DASH_LINE DB 13,10,'------------------------------------------------------------$'
+MSG_P1    DB 13,10,'Player 1  Attempts: $'
+MSG_P2    DB 13,10,'Player 2  Attempts: $'
+MSG_OF    DB '/$'
+MSG_SCORE_SHORT DB '   Score: $'
+MSG_TURN  DB 13,10,13,10,'>>> CURRENT TURN: PLAYER $'
+
+MSG_VERIFY DB 13,10,'Enter your player number to continue: $'
+MSG_NOT_TURN DB 13,10,'Not your turn! Only the current player can act.$'
+
+MSG_MENU DB 13,10,13,10,'  [G] Make Guess',13,10
+         DB '  [H] View History',13,10
+         DB '  [Q] Quit Game',13,10
+         DB 'Choice: $'
+MSG_BAD_MENU DB 13,10,'Invalid option.$'
+
+MSG_ENTER1 DB 13,10,'Enter your $'
+MSG_ENTER2 DB '-digit guess using values 1-$'
+MSG_ENTER3 DB ': $'
+MSG_BAD_GUESS DB 13,10,'Invalid digit. Re-enter the whole guess.$'
+
+MSG_DUPLICATE DB 13,10,13,10,'Duplicate guess! You already tried that code.$'
+
+RESULT_TOP DB 13,10,13,10,'---------------------- GUESS RESULT ------------------------$'
+MSG_EXACT  DB 13,10,'Exact matches     : $'
+MSG_MISPLACED DB 13,10,'Misplaced matches : $'
+MSG_ATTEMPT DB 13,10,'Attempts used     : $'
+MSG_SCORE   DB 13,10,'Current score     : $'
+
+MSG_AFTER DB 13,10,13,10,'  [U] Undo this guess',13,10
+          DB '  [N] End turn',13,10
+          DB '  [Q] Quit game',13,10
+          DB 'Choice: $'
+MSG_UNDONE  DB 13,10,'Guess undone. Attempt, score and history restored.$'
+MSG_NO_UNDO DB 13,10,'Nothing to undo.$'
+
+MSG_HISTORY_TITLE DB '============================================================',13,10
+                  DB '                       GUESS HISTORY',13,10
+                  DB '============================================================$'
+MSG_NO_HISTORY DB 13,10,'No guesses recorded yet.$'
+MSG_H_PLAYER DB 13,10,'P$'
+MSG_H_GUESS  DB '  Guess $'
+MSG_H_COLON  DB ': $'
+MSG_H_EXACT  DB '   Exact=$'
+MSG_H_WRONG  DB '   Misplaced=$'
+
+MSG_SOLVED DB 13,10,13,10,'*** SECRET CODE CRACKED! ***$'
+MSG_LIMIT  DB 13,10,'Both players have used all available tries.$'
+MSG_QUIT   DB 13,10,'Game ended by user.$'
+
+FINAL_TOP DB '============================================================',13,10
+          DB '                         GAME OVER',13,10
+          DB '============================================================$'
+MSG_SECRET DB 13,10,'Secret code       : $'
+MSG_FINAL_P1 DB 13,10,'Player 1 - Attempts: $'
+MSG_FINAL_P2 DB 13,10,'Player 2 - Attempts: $'
+MSG_FINAL_SCORE DB '   Score: $'
+MSG_WINNER DB 13,10,13,10,'WINNER: PLAYER $'
+MSG_SOLVER_WINS DB ' - cracked the code!$'
+MSG_SCORE_WINS  DB ' - higher score!$'
+MSG_TIE DB 13,10,13,10,'RESULT: TIE$'
+
+.CODE
+
+MAIN PROC
+    MOV AX, @DATA
+    MOV DS, AX
+
+    CALL CLEAR_SCREEN
+    CALL SHOW_TITLE
+    CALL SET_LEVEL
+    CALL MAKE_SEED
+    CALL GEN_CODE
+    CALL SHOW_SETUP
+
+TURN_START:
+    CALL CHECK_LIMIT
+    CMP AL, 1
+    JE GAME_BY_LIMIT
+
+    CALL SHOW_DASHBOARD
+    CALL VERIFY_PLAYER
+
+ACTION_MENU:
+    PRINTS MSG_MENU
+    MOV AH, 1
+    INT 21H
+
+    CMP AL, 'G'
+    JE MAKE_GUESS
+    CMP AL, 'g'
+    JE MAKE_GUESS
+    CMP AL, 'H'
+    JE VIEW_HISTORY
+    CMP AL, 'h'
+    JE VIEW_HISTORY
+    CMP AL, 'Q'
+    JE GAME_BY_QUIT
+    CMP AL, 'q'
+    JE GAME_BY_QUIT
+
+    PRINTS MSG_BAD_MENU
+    JMP ACTION_MENU
+
+VIEW_HISTORY:
+    CALL SHOW_HISTORY
+    JMP TURN_START
+
+MAKE_GUESS:
+    CALL READ_GUESS
+    CALL CHECK_DUPLICATE
+
+    CMP AL, 1
+    JE DUPLICATE_FOUND
+
+    CALL ADD_ATTEMPT
+    CALL RESET_FEEDBACK
+    CALL CHECK_CORRECT_POSITION
+    CALL CHECK_WRONG_POSITION
+    CALL CALCULATE_SCORE
+    CALL STORE_HISTORY
+
+    MOV AL, CURRENTPLAYER
+    MOV AH, 0
+    PUSH AX
+
+    MOV AX, LASTPOINTS
+    PUSH AX
+
+    CALL DISPLAY_RESULT
+
+    MOV AL, CORRECTPOS
+    MOV AH, 0
+    CMP AX, CODELEN
+    JE CODE_SOLVED
+
+AFTER_GUESS:
+    PRINTS MSG_AFTER
+
+    MOV AH, 1
+    INT 21H
+
+    CMP AL, 'U'
+    JE DO_UNDO
+    CMP AL, 'u'
+    JE DO_UNDO
+    CMP AL, 'N'
+    JE END_TURN
+    CMP AL, 'n'
+    JE END_TURN
+    CMP AL, 'Q'
+    JE GAME_BY_QUIT
+    CMP AL, 'q'
+    JE GAME_BY_QUIT
+
+    PRINTS MSG_BAD_MENU
+    JMP AFTER_GUESS
+
+DO_UNDO:
+    CALL UNDO_LAST
+    PRINTS MSG_PRESS
+    CALL WAIT_KEY
+    JMP TURN_START
+
+END_TURN:
+    CALL CHECK_LIMIT
+    CMP AL, 1
+    JE GAME_BY_LIMIT
+
+    CALL SWITCH_PLAYER
+    JMP TURN_START
+
+DUPLICATE_FOUND:
+    PRINTS MSG_DUPLICATE
+    PRINTS MSG_PRESS
+    CALL WAIT_KEY
+    JMP TURN_START
+
+CODE_SOLVED:
+    MOV SOLVEDFLAG, 1
+    MOV AL, CURRENTPLAYER
+    MOV WINNER, AL
+
+    PRINTS MSG_SOLVED
+    PRINTS MSG_PRESS
+    CALL WAIT_KEY
+
+    CALL SHOW_FINAL_RESULT
+    JMP EXIT_PROGRAM
+
+GAME_BY_LIMIT:
+    MOV SOLVEDFLAG, 0
+    CALL CLEAR_SCREEN
+    CALL SHOW_TITLE
+    PRINTS MSG_LIMIT
+    PRINTS MSG_PRESS
+    CALL WAIT_KEY
+    CALL SHOW_FINAL_RESULT
+    JMP EXIT_PROGRAM
+
+GAME_BY_QUIT:
+    MOV SOLVEDFLAG, 0
+    CALL CLEAR_SCREEN
+    CALL SHOW_TITLE
+    PRINTS MSG_QUIT
+    PRINTS MSG_PRESS
+    CALL WAIT_KEY
+    CALL SHOW_FINAL_RESULT
+
+EXIT_PROGRAM:
+    MOV AH, 4CH
+    INT 21H
+MAIN ENDP
+
+
+; F1 - Difficulty and random secret
+
+SET_LEVEL PROC
+SL_ASK:
+    PRINTS MSG_LEVEL
+
+    MOV AH, 1
+    INT 21H
+
+    CMP AL, '1'
+    JE SL_EASY
+    CMP AL, '2'
+    JE SL_MEDIUM
+    CMP AL, '3'
+    JE SL_HARD
+
+    PRINTS MSG_INVALID_LEVEL
+    JMP SL_ASK
+
+SL_EASY:
+    MOV LEVEL, 1
+    MOV CODELEN, 3
+    MOV MAXDIGIT, 5
+    MOV MAXTRIES, 9
+    JMP SL_DONE
+
+SL_MEDIUM:
+    MOV LEVEL, 2
+    MOV CODELEN, 4
+    MOV MAXDIGIT, 6
+    MOV MAXTRIES, 8
+    JMP SL_DONE
+
+SL_HARD:
+    MOV LEVEL, 3
+    MOV CODELEN, 5
+    MOV MAXDIGIT, 7
+    MOV MAXTRIES, 7
+
+SL_DONE:
+    RET
+SET_LEVEL ENDP
+
+
+MAKE_SEED PROC
+    MOV AH, 2CH
+    INT 21H
+
+    MOV AH, DH
+    MOV AL, DL
+    MOV SEED, AX
+
+    CMP SEED, 0
+    JNE MS_DONE
+
+    MOV SEED, 12345
+
+MS_DONE:
+    RET
+MAKE_SEED ENDP
+
+
+RANDOM PROC
+    MOV AX, SEED
+    MOV BX, 25173
+    MUL BX
+
+    ADD AX, 13849
+    MOV SEED, AX
+
+    MOV AL, AH
+    MOV AH, 0
+    MOV BL, MAXDIGIT
+    DIV BL
+
+    MOV AL, AH
+    ADD AL, 1
+
+    RET
+RANDOM ENDP
+
+
+GEN_CODE PROC
+    MOV SI, 0
+
+GC_LOOP:
+    CALL RANDOM
+    MOV SECRET[SI], AL
+
+    INC SI
+    CMP SI, CODELEN
+    JL GC_LOOP
+
+    RET
+GEN_CODE ENDP
+
+
+; F4 - Turn verification and attempts
+
+VERIFY_PLAYER PROC
+VP_ASK:
+    PRINTS MSG_VERIFY
+
+    MOV AH, 1
+    INT 21H
+    SUB AL, 30H
+
+    CMP AL, CURRENTPLAYER
+    JE VP_OK
+
+    PRINTS MSG_NOT_TURN
+    JMP VP_ASK
+
+VP_OK:
+    RET
+VERIFY_PLAYER ENDP
+
+
+ADD_ATTEMPT PROC
+    CMP CURRENTPLAYER, 1
+    JE AA_P1
+
+    INC ATTEMPTS2
+    RET
+
+AA_P1:
+    INC ATTEMPTS1
+    RET
+ADD_ATTEMPT ENDP
+
+
+SWITCH_PLAYER PROC
+    CMP CURRENTPLAYER, 1
+    JE SP_TO_P2
+
+    MOV AL, MAXTRIES
+    CMP ATTEMPTS1, AL
+    JAE SP_STAY_P2
+
+    MOV CURRENTPLAYER, 1
+    RET
+
+SP_STAY_P2:
+    MOV CURRENTPLAYER, 2
+    RET
+
+SP_TO_P2:
+    MOV AL, MAXTRIES
+    CMP ATTEMPTS2, AL
+    JAE SP_STAY_P1
+
+    MOV CURRENTPLAYER, 2
+    RET
+
+SP_STAY_P1:
+    MOV CURRENTPLAYER, 1
+    RET
+SWITCH_PLAYER ENDP
+
+
+; Input
+
+READ_GUESS PROC
+RG_RESTART:
+    MOV SI, 0
+
+RG_CLEAR:
+    MOV GUESS[SI], 0
+    INC SI
+
+    CMP SI, 6
+    JL RG_CLEAR
+
+    PRINTS MSG_ENTER1
+
+    MOV AX, CODELEN
+    CALL PRINT_NUM
+
+    PRINTS MSG_ENTER2
+
+    MOV AL, MAXDIGIT
+    PUTDIG
+
+    PRINTS MSG_ENTER3
+
+    MOV SI, 0
+
+RG_LOOP:
+    MOV AH, 1
+    INT 21H
+
+    CMP AL, '1'
+    JB RG_BAD
+
+    MOV BL, MAXDIGIT
+    ADD BL, 30H
+
+    CMP AL, BL
+    JA RG_BAD
+
+    SUB AL, 30H
+    MOV GUESS[SI], AL
+
+    INC SI
+    CMP SI, CODELEN
+    JL RG_LOOP
+
+    RET
+
+RG_BAD:
+    PRINTS MSG_BAD_GUESS
+    JMP RG_RESTART
+READ_GUESS ENDP
+
+
+; F5 - Duplicate detection
+
+CHECK_DUPLICATE PROC
+    MOV CL, HISTORYCOUNT
+    MOV CH, 0
+
+    CMP CX, 0
+    JE CD_NOT_FOUND
+
+    MOV DI, 0
+
+CD_RECORD:
+    MOV AL, PLAYERHIST[DI]
+    CMP AL, CURRENTPLAYER
+    JNE CD_NEXT
+
+    MOV AX, DI
+    MOV BL, 5
+    MUL BL
+    MOV BX, AX
+
+    MOV SI, 0
+
+CD_COMPARE:
+    MOV AL, GUESS[SI]
+    CMP AL, HISTORY[BX+SI]
+    JNE CD_NEXT
+
+    INC SI
+    CMP SI, CODELEN
+    JL CD_COMPARE
+
+    MOV AL, 1
+    RET
+
+CD_NEXT:
+    INC DI
+    LOOP CD_RECORD
+
+CD_NOT_FOUND:
+    MOV AL, 0
+    RET
+CHECK_DUPLICATE ENDP
+
+
+; F2 - Guess feedback
+
+RESET_FEEDBACK PROC
+    MOV CORRECTPOS, 0
+    MOV WRONGPOS, 0
+    MOV SI, 0
+
+RF_LOOP:
+    MOV USEDSECRET[SI], 0
+    MOV USEDGUESS[SI], 0
+
+    INC SI
+    CMP SI, CODELEN
+    JL RF_LOOP
+
+    RET
+RESET_FEEDBACK ENDP
+
+
+CHECK_CORRECT_POSITION PROC
+    MOV SI, 0
+
+CC_LOOP:
+    MOV AL, GUESS[SI]
+    CMP AL, SECRET[SI]
+    JNE CC_NEXT
+
+    INC CORRECTPOS
+    MOV USEDGUESS[SI], 1
+    MOV USEDSECRET[SI], 1
+
+CC_NEXT:
+    INC SI
+    CMP SI, CODELEN
+    JL CC_LOOP
+
+    RET
+CHECK_CORRECT_POSITION ENDP
+
+
+CHECK_WRONG_POSITION PROC
+    MOV SI, 0
+
+CW_OUTER:
+    CMP USEDGUESS[SI], 1
+    JE CW_NEXT_GUESS
+
+    MOV DI, 0
+
+CW_INNER:
+    CMP USEDSECRET[DI], 1
+    JE CW_NEXT_SECRET
+
+    MOV AL, GUESS[SI]
+    CMP AL, SECRET[DI]
+    JNE CW_NEXT_SECRET
+
+    INC WRONGPOS
+    MOV USEDGUESS[SI], 1
+    MOV USEDSECRET[DI], 1
+    JMP CW_NEXT_GUESS
+
+CW_NEXT_SECRET:
+    INC DI
+    CMP DI, CODELEN
+    JL CW_INNER
+
+CW_NEXT_GUESS:
+    INC SI
+    CMP SI, CODELEN
+    JL CW_OUTER
+
+    RET
+CHECK_WRONG_POSITION ENDP
+
+
+; F6 - Score and winner
+
+CALCULATE_SCORE PROC
+    MOV LASTPOINTS, 0
+
+    MOV AL, CORRECTPOS
+    CMP AL, 0
+    JE CS_DONE
+
+    MOV AH, 0
+    MOV BL, 10
+    MUL BL
+    MOV BX, AX
+
+    MOV AL, MAXTRIES
+    MOV AH, 0
+    MOV DX, AX
+
+    CMP CURRENTPLAYER, 1
+    JE CS_P1
+
+    MOV AL, ATTEMPTS2
+    MOV AH, 0
+    SUB DX, AX
+    ADD BX, DX
+
+    MOV LASTPOINTS, BX
+    ADD SCORE2, BX
+    RET
+
+CS_P1:
+    MOV AL, ATTEMPTS1
+    MOV AH, 0
+    SUB DX, AX
+    ADD BX, DX
+
+    MOV LASTPOINTS, BX
+    ADD SCORE1, BX
+
+CS_DONE:
+    RET
+CALCULATE_SCORE ENDP
+
+
+CHECK_LIMIT PROC
+    MOV AL, MAXTRIES
+
+    CMP ATTEMPTS1, AL
+    JB CL_NO
+
+    CMP ATTEMPTS2, AL
+    JB CL_NO
+
+    MOV AL, 1
+    RET
+
+CL_NO:
+    MOV AL, 0
+    RET
+CHECK_LIMIT ENDP
+
+
+SHOW_FINAL_RESULT PROC
+    CALL CLEAR_SCREEN
+    PRINTS FINAL_TOP
+
+    PRINTS MSG_SECRET
+    CALL SHOW_SECRET_VALUE
+
+    PRINTS MSG_FINAL_P1
+    MOV AL, ATTEMPTS1
+    PUTDIG
+    PRINTS MSG_OF
+    MOV AL, MAXTRIES
+    PUTDIG
+    PRINTS MSG_FINAL_SCORE
+    MOV AX, SCORE1
+    CALL PRINT_NUM
+
+    PRINTS MSG_FINAL_P2
+    MOV AL, ATTEMPTS2
+    PUTDIG
+    PRINTS MSG_OF
+    MOV AL, MAXTRIES
+    PUTDIG
+    PRINTS MSG_FINAL_SCORE
+    MOV AX, SCORE2
+    CALL PRINT_NUM
+
+    CMP SOLVEDFLAG, 1
+    JE SF_SOLVED
+
+    MOV AX, SCORE1
+    CMP AX, SCORE2
+    JA SF_P1
+    CMP AX, SCORE2
+    JB SF_P2
+
+    MOV WINNER, 0
+    PRINTS MSG_TIE
+    RET
+
+SF_P1:
+    MOV WINNER, 1
+    PRINTS MSG_WINNER
+    MOV AL, 1
+    PUTDIG
+    PRINTS MSG_SCORE_WINS
+    RET
+
+SF_P2:
+    MOV WINNER, 2
+    PRINTS MSG_WINNER
+    MOV AL, 2
+    PUTDIG
+    PRINTS MSG_SCORE_WINS
+    RET
+
+SF_SOLVED:
+    PRINTS MSG_WINNER
+    MOV AL, WINNER
+    PUTDIG
+    PRINTS MSG_SOLVER_WINS
+    RET
+SHOW_FINAL_RESULT ENDP
+
+
+; F3 - History and stack undo
+
+STORE_HISTORY PROC
+    MOV AL, HISTORYCOUNT
+    MOV AH, 0
+    MOV DI, AX
+
+    MOV AL, CURRENTPLAYER
+    MOV PLAYERHIST[DI], AL
+
+    MOV AL, CORRECTPOS
+    MOV CORRECTHIST[DI], AL
+
+    MOV AL, WRONGPOS
+    MOV WRONGHIST[DI], AL
+
+    MOV AX, DI
+    MOV BL, 5
+    MUL BL
+    MOV BX, AX
+
+    MOV SI, 0
+    MOV CX, 5
+
+SH_CLEAR:
+    MOV HISTORY[BX+SI], 0
+    INC SI
+    LOOP SH_CLEAR
+
+    MOV SI, 0
+    MOV CX, CODELEN
+
+SH_COPY:
+    MOV AL, GUESS[SI]
+    MOV HISTORY[BX+SI], AL
+
+    INC SI
+    LOOP SH_COPY
+
+    INC HISTORYCOUNT
+    RET
+STORE_HISTORY ENDP
+
+
+SHOW_HISTORY PROC
+    CALL CLEAR_SCREEN
+    PRINTS MSG_HISTORY_TITLE
+
+    CMP HISTORYCOUNT, 0
+    JE SH_EMPTY
+
+    MOV DI, 0
+
+SH_RECORD:
+    PRINTS MSG_H_PLAYER
+
+    MOV AL, PLAYERHIST[DI]
+    PUTDIG
+
+    PRINTS MSG_H_GUESS
+
+    MOV AX, DI
+    INC AX
+    CALL PRINT_NUM
+
+    PRINTS MSG_H_COLON
+
+    MOV AX, DI
+    MOV BL, 5
+    MUL BL
+    MOV BX, AX
+
+    MOV SI, 0
+
+SH_PRINT_GUESS:
+    MOV AL, HISTORY[BX+SI]
+    PUTDIG
+
+    INC SI
+    CMP SI, CODELEN
+    JL SH_PRINT_GUESS
+
+    PRINTS MSG_H_EXACT
+
+    MOV AL, CORRECTHIST[DI]
+    PUTDIG
+
+    PRINTS MSG_H_WRONG
+
+    MOV AL, WRONGHIST[DI]
+    PUTDIG
+
+    INC DI
+
+    MOV AL, HISTORYCOUNT
+    MOV AH, 0
+    CMP DI, AX
+    JL SH_RECORD
+
+    JMP SH_WAIT
+
+SH_EMPTY:
+    PRINTS MSG_NO_HISTORY
+
+SH_WAIT:
+    PRINTS MSG_PRESS
+    CALL WAIT_KEY
+    RET
+SHOW_HISTORY ENDP
+
+
+UNDO_LAST PROC
+    CMP HISTORYCOUNT, 0
+    JE UL_EMPTY
+
+    POP AX
+    MOV UNDORETURN, AX
+
+    POP AX
+    MOV UNDOPOINTS, AX
+
+    POP AX
+    MOV UNDOPLAYER, AL
+
+    MOV AX, UNDORETURN
+    PUSH AX
+
+    DEC HISTORYCOUNT
+
+    MOV AL, HISTORYCOUNT
+    MOV AH, 0
+    MOV DI, AX
+
+    MOV PLAYERHIST[DI], 0
+    MOV CORRECTHIST[DI], 0
+    MOV WRONGHIST[DI], 0
+
+    MOV AX, DI
+    MOV BL, 5
+    MUL BL
+    MOV BX, AX
+
+    MOV SI, 0
+    MOV CX, 5
+
+UL_CLEAR:
+    MOV HISTORY[BX+SI], 0
+    INC SI
+    LOOP UL_CLEAR
+
+    CMP UNDOPLAYER, 1
+    JE UL_P1
+
+    CMP ATTEMPTS2, 0
+    JE UL_P2_SCORE
+    DEC ATTEMPTS2
+
+UL_P2_SCORE:
+    MOV AX, UNDOPOINTS
+    SUB SCORE2, AX
+    MOV CURRENTPLAYER, 2
+    PRINTS MSG_UNDONE
+    RET
+
+UL_P1:
+    CMP ATTEMPTS1, 0
+    JE UL_P1_SCORE
+    DEC ATTEMPTS1
+
+UL_P1_SCORE:
+    MOV AX, UNDOPOINTS
+    SUB SCORE1, AX
+    MOV CURRENTPLAYER, 1
+    PRINTS MSG_UNDONE
+    RET
+
+UL_EMPTY:
+    PRINTS MSG_NO_UNDO
+    RET
+UNDO_LAST ENDP
+
+
+; Display helpers
+
+SHOW_TITLE PROC
+    PRINTS TITLE1
+    PRINTS TITLE2
+    PRINTS TITLE3
+    RET
+SHOW_TITLE ENDP
+
+
+SHOW_SETUP PROC
+    CALL CLEAR_SCREEN
+    CALL SHOW_TITLE
+
+    PRINTS MSG_READY1
+    PRINTS MSG_LEVEL_NAME
+
+    CMP LEVEL, 1
+    JE SS_EASY
+    CMP LEVEL, 2
+    JE SS_MEDIUM
+
+    PRINTS MSG_HARD
+    JMP SS_INFO
+
+SS_EASY:
+    PRINTS MSG_EASY
+    JMP SS_INFO
+
+SS_MEDIUM:
+    PRINTS MSG_MEDIUM
+
+SS_INFO:
+    PRINTS MSG_LENGTH
+    MOV AX, CODELEN
+    CALL PRINT_NUM
+
+    PRINTS MSG_DIGITS
+    MOV AL, MAXDIGIT
+    PUTDIG
+
+    PRINTS MSG_TRIES
+    MOV AL, MAXTRIES
+    PUTDIG
+
+    PRINTS MSG_RULE1
+    PRINTS MSG_RULE2
+    PRINTS MSG_RULE3
+    PRINTS MSG_PRESS
+
+    CALL WAIT_KEY
+    RET
+SHOW_SETUP ENDP
+
+
+SHOW_DASHBOARD PROC
+    CALL CLEAR_SCREEN
+    CALL SHOW_TITLE
+
+    PRINTS DASH_LINE
+
+    PRINTS MSG_P1
+    MOV AL, ATTEMPTS1
+    PUTDIG
+    PRINTS MSG_OF
+    MOV AL, MAXTRIES
+    PUTDIG
+    PRINTS MSG_SCORE_SHORT
+    MOV AX, SCORE1
+    CALL PRINT_NUM
+
+    PRINTS MSG_P2
+    MOV AL, ATTEMPTS2
+    PUTDIG
+    PRINTS MSG_OF
+    MOV AL, MAXTRIES
+    PUTDIG
+    PRINTS MSG_SCORE_SHORT
+    MOV AX, SCORE2
+    CALL PRINT_NUM
+
+    PRINTS DASH_LINE
+    PRINTS MSG_TURN
+
+    MOV AL, CURRENTPLAYER
+    PUTDIG
+
+    PRINTS DASH_LINE
+    RET
+SHOW_DASHBOARD ENDP
+
+
+DISPLAY_RESULT PROC
+    PRINTS RESULT_TOP
+
+    PRINTS MSG_EXACT
+    MOV AL, CORRECTPOS
+    PUTDIG
+
+    PRINTS MSG_MISPLACED
+    MOV AL, WRONGPOS
+    PUTDIG
+
+    PRINTS MSG_ATTEMPT
+
+    CMP CURRENTPLAYER, 1
+    JE DR_P1
+
+    MOV AL, ATTEMPTS2
+    PUTDIG
+    JMP DR_ATTEMPT_DONE
+
+DR_P1:
+    MOV AL, ATTEMPTS1
+    PUTDIG
+
+DR_ATTEMPT_DONE:
+    PRINTS MSG_OF
+    MOV AL, MAXTRIES
+    PUTDIG
+
+    PRINTS MSG_SCORE
+
+    CMP CURRENTPLAYER, 1
+    JE DR_SCORE_P1
+
+    MOV AX, SCORE2
+    CALL PRINT_NUM
+    JMP DR_DONE
+
+DR_SCORE_P1:
+    MOV AX, SCORE1
+    CALL PRINT_NUM
+
+DR_DONE:
+    PRINTS DASH_LINE
+    RET
+DISPLAY_RESULT ENDP
+
+
+SHOW_SECRET_VALUE PROC
+    MOV SI, 0
+
+SV_LOOP:
+    MOV AL, SECRET[SI]
+    PUTDIG
+
+    INC SI
+    CMP SI, CODELEN
+    JL SV_LOOP
+
+    RET
+SHOW_SECRET_VALUE ENDP
+
+
+PRINT_NUM PROC
+    MOV BX, 10
+    MOV CX, 0
+
+PN_DIVIDE:
+    MOV DX, 0
+    DIV BX
+
+    PUSH DX
+    INC CX
+
+    CMP AX, 0
+    JNZ PN_DIVIDE
+
+PN_PRINT:
+    POP DX
+    ADD DL, 30H
+
+    MOV AH, 2
+    INT 21H
+
+    LOOP PN_PRINT
+    RET
+PRINT_NUM ENDP
+
+
+CLEAR_SCREEN PROC
+    MOV AX, 0003H
+    INT 10H
+    RET
+CLEAR_SCREEN ENDP
+
+
+WAIT_KEY PROC
+    MOV AH, 08H
+    INT 21H
+    RET
+WAIT_KEY ENDP
+
+END MAIN
